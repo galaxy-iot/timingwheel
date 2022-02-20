@@ -118,6 +118,18 @@ func (tw *TimingWheel) addOrRun(t *Timer) {
 	}
 }
 
+// addOrRun inserts the timer t into the current timing wheel, or run the
+// timer's task if it has already expired.
+func (tw *TimingWheel) insert(t *Timer) {
+	if !tw.add(t) {
+		// Already expired
+
+		// Like the standard time.AfterFunc (https://golang.org/pkg/time/#AfterFunc),
+		// always execute the timer's task in its own goroutine.
+		t.insert()
+	}
+}
+
 func (tw *TimingWheel) advanceClock(expiration int64) {
 	currentTime := atomic.LoadInt64(&tw.currentTime)
 	if expiration >= currentTime+tw.tick {
@@ -147,6 +159,37 @@ func (tw *TimingWheel) Start() {
 				b := elem.(*bucket)
 				tw.advanceClock(b.Expiration())
 				b.Flush(tw.addOrRun)
+			case <-tw.exitC:
+				return
+			}
+		}
+	})
+}
+
+// Start starts the current timing wheel.
+func (tw *TimingWheel) StartWithoutRepeat() {
+	tw.waitGroup.Wrap(func() {
+		tw.queue.Poll(tw.exitC, func() int64 {
+			return timeToMs(time.Now().UTC())
+		})
+	})
+
+	tw.waitGroup.Wrap(func() {
+		for {
+			select {
+			case elem := <-tw.queue.C:
+				b := elem.(*bucket)
+				tw.advanceClock(b.Expiration())
+
+				t, ok := b.Flush(tw.addOrRun)
+				if !ok {
+					continue
+				}
+
+				currentTime := atomic.LoadInt64(&tw.currentTime)
+				if t.expiration < currentTime+tw.interval {
+					t.f()
+				}
 			case <-tw.exitC:
 				return
 			}
@@ -219,6 +262,45 @@ func (tw *TimingWheel) ScheduleFunc(s Scheduler, f func()) (t *Timer) {
 			// Actually execute the task.
 			f()
 		},
+	}
+	tw.addOrRun(t)
+
+	return
+}
+
+// ScheduleFunc calls f (in its own goroutine) according to the execution
+// plan scheduled by s. It returns a Timer that can be used to cancel the
+// call using its Stop method.
+//
+// If the caller want to terminate the execution plan halfway, it must
+// stop the timer and ensure that the timer is stopped actually, since in
+// the current implementation, there is a gap between the expiring and the
+// restarting of the timer. The wait time for ensuring is short since the
+// gap is very small.
+//
+// Internally, ScheduleFunc will ask the first execution time (by calling
+// s.Next()) initially, and create a timer if the execution time is non-zero.
+// Afterwards, it will ask the next execution time each time f is about to
+// be executed, and f will be called at the next execution time if the time
+// is non-zero.
+func (tw *TimingWheel) ScheduleWithOutRepeat(s Scheduler, f func()) (t *Timer) {
+	expiration := s.Next(time.Now().UTC())
+	if expiration.IsZero() {
+		// No time is scheduled, return nil.
+		return
+	}
+
+	t = &Timer{
+		expiration: timeToMs(expiration),
+		insert: func() {
+			// Schedule the task to execute at the next time if possible.
+			expiration := s.Next(msToTime(t.expiration))
+			if !expiration.IsZero() {
+				t.expiration = timeToMs(expiration)
+				tw.insert(t)
+			}
+		},
+		f: f,
 	}
 	tw.addOrRun(t)
 

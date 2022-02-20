@@ -12,6 +12,9 @@ import (
 type Timer struct {
 	expiration int64 // in milliseconds
 	task       func()
+	insert     func()
+
+	f func()
 
 	// The bucket that holds the list to which this timer's element belongs.
 	//
@@ -111,7 +114,9 @@ func (b *bucket) Remove(t *Timer) bool {
 	return b.remove(t)
 }
 
-func (b *bucket) Flush(reinsert func(*Timer)) {
+func (b *bucket) Flush(reinsert func(*Timer)) (*Timer, bool) {
+	var ts []*Timer
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -130,4 +135,14 @@ func (b *bucket) Flush(reinsert func(*Timer)) {
 	}
 
 	b.SetExpiration(-1)
+
+	for _, t := range ts {
+		reinsert(t)
+	}
+
+	if len(ts) <= 0 {
+		return nil, false
+	}
+
+	return ts[0], true
 }
