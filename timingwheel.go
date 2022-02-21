@@ -181,7 +181,7 @@ func (tw *TimingWheel) StartWithoutRepeat() {
 				b := elem.(*bucket)
 				tw.advanceClock(b.Expiration())
 
-				t, ok := b.Flush(tw.addOrRun)
+				t, ok := b.Flush(tw.insert)
 				if !ok {
 					continue
 				}
@@ -292,6 +292,17 @@ func (tw *TimingWheel) ScheduleWithOutRepeat(s Scheduler, f func()) (t *Timer) {
 
 	t = &Timer{
 		expiration: timeToMs(expiration),
+		task: func() {
+			// Schedule the task to execute at the next time if possible.
+			expiration := s.Next(msToTime(t.expiration))
+			if !expiration.IsZero() {
+				t.expiration = timeToMs(expiration)
+				tw.addOrRun(t)
+			}
+
+			// Actually execute the task.
+			f()
+		},
 		insert: func() {
 			// Schedule the task to execute at the next time if possible.
 			expiration := s.Next(msToTime(t.expiration))

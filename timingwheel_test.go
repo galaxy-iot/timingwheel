@@ -1,6 +1,7 @@
 package timingwheel_test
 
 import (
+	"log"
 	"testing"
 	"time"
 
@@ -87,5 +88,23 @@ func TestTimingWheel_ScheduleFunc(t *testing.T) {
 		if got.Before(min) || got.After(min.Add(err)) {
 			t.Errorf("Timer(%s) expiration: want [%s, %s], got %s", accum, min, min.Add(err), got)
 		}
+	}
+}
+
+func TestTimingWheel_ScheduleFuncWithNoRepeat(t *testing.T) {
+	tw := timingwheel.NewTimingWheel(time.Millisecond, 1000)
+	tw.StartWithoutRepeat()
+	defer tw.Stop()
+
+	tw.ScheduleWithOutRepeat(&EveryScheduler{3 * time.Second}, func() {
+		log.Println("The timer fires")
+	})
+
+	tw.ScheduleWithOutRepeat(&EveryScheduler{4 * time.Second}, func() {
+		log.Println("The timer fires1")
+	})
+
+	for {
+		time.Sleep(5 * time.Second)
 	}
 }
